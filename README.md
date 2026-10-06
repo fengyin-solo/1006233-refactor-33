@@ -69,4 +69,7 @@ npm run build
 - 字段、状态、动作与流转目标集中在 `frontend/src/data/modules.ts`；示例数据在
   `frontend/src/data/seed.ts`。
 - 状态流转只允许在 `local-service.ts` 里改，页面组件不做业务判断。
+- 继电保护的到期判定（上次校验日、下次校验日、提前量、动作次数）统一在
+  `frontend/src/data/protection-expiry.ts`，列表展示、动作提示、另存排序与隐患清单回写都调这一份，
+  正常/待校验/即将到期三档边界只在这一处定义。
 - 想回到初始数据：清掉浏览器里 `hydropower-plant-om:entries` 这一项，或调用 `resetModule(模块)`。

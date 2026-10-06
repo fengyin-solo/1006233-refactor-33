@@ -7,6 +7,8 @@
       </div>
       <div class="page-actions">
         <button class="btn primary" type="button" @click="openCreate">登记保护装置</button>
+        <button class="btn" type="button" @click="writeBackHazards">回写隐患清单</button>
+        <button class="btn" type="button" @click="exportHazards">导出隐患清单</button>
         <button class="btn" type="button" @click="exportRows">导出继电保护清单</button>
       </div>
     </header>
@@ -37,6 +39,7 @@
       <thead>
         <tr>
           <th v-for="column in columns" :key="column">{{ column }}</th>
+          <th>到期判定</th>
           <th>当前状态</th>
           <th>可执行动作</th>
         </tr>
@@ -44,6 +47,7 @@
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td :title="assessmentNote(row)">{{ assessmentBadgeOf(row) }}</td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button
@@ -58,13 +62,14 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无继电保护数据，可先登记保护装置</td>
+          <td :colspan="columns.length + 3" class="empty-state">暂无继电保护数据，可先登记保护装置</td>
         </tr>
       </tbody>
     </table>
 
     <footer class="page-foot">
       <span>共 {{ total }} 条继电保护记录</span>
+      <span v-if="noticeMessage" class="notice-text">{{ noticeMessage }}</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -75,29 +80,59 @@ import { computed, onMounted, ref } from 'vue'
 
 import {
   downloadEntries,
+  downloadProtectionHazards,
   listEntries,
+  listProtectionHazards,
   moduleMeta,
+  protectionAssessments,
+  protectionSummary,
   runAction as applyAction,
+  syncProtectionHazards,
 } from '@/api/local-service'
+import { assessmentBadge } from '@/data/protection-expiry'
+import type { ProtectionAssessment, ProtectionTier } from '@/data/protection-expiry'
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('protection')
 const columns = ["装置编号", "保护类型", "定值单号", "上次校验日", "下次校验日", "动作次数", "校验人员", "装置状态"]
 const actions = ["提交校验", "标记异常", "退出运行"]
 const statuses = ["待校验", "正常", "异常", "已退出"]
-const stats = [{"label": "正常保护装置", "value": 0}, {"label": "待校验装置", "value": 0}, {"label": "即将到期装置", "value": 0}]
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const noticeMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+// 三档（含未建档）统计与逐台判定都来自 data/protection-expiry.ts 那一份实现。
+const summary = ref<Record<ProtectionTier, number>>({ 正常: 0, 待校验: 0, 即将到期: 0, 未建档: 0 })
+const assessments = ref<Map<number, ProtectionAssessment>>(new Map())
+
+const stats = computed(() => [
+  { label: '正常保护装置', value: summary.value['正常'] },
+  { label: '待校验装置', value: summary.value['待校验'] },
+  { label: '即将到期装置', value: summary.value['即将到期'] },
+  { label: '未建档装置', value: summary.value['未建档'] },
+])
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+function assessmentOf(row: EntryRow): ProtectionAssessment | undefined {
+  return assessments.value.get(Number(row.id))
+}
+
+function assessmentBadgeOf(row: EntryRow): string {
+  const assessment = assessmentOf(row)
+  return assessment ? assessmentBadge(assessment) : '—'
+}
+
+function assessmentNote(row: EntryRow): string {
+  return assessmentOf(row)?.note ?? ''
+}
 
 function resetFilters() {
   filters.value = {}
@@ -114,12 +149,28 @@ function openCreate() {
 
 function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
+  noticeMessage.value = ''
   const result = applyAction(meta.key, Number(row.id), action)
   if (!result.ok) {
     errorMessage.value = result.message
     return
   }
+  noticeMessage.value = result.message
   reload()
+}
+
+function writeBackHazards() {
+  errorMessage.value = ''
+  const result = syncProtectionHazards()
+  noticeMessage.value = `已按最近一次判定覆盖隐患清单：回写 ${result.written} 条、移除失效 ${result.removed} 条，缺陷处置页与导出清单同为 ${result.written} 条`
+  reload()
+}
+
+function exportHazards() {
+  errorMessage.value = ''
+  const count = listProtectionHazards().length
+  downloadProtectionHazards()
+  noticeMessage.value = `已导出隐患清单 ${count} 条，与页面条数一致`
 }
 
 function reload() {
@@ -128,6 +179,8 @@ function reload() {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
+    summary.value = protectionSummary()
+    assessments.value = protectionAssessments()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '继电保护列表读取失败'
   }
