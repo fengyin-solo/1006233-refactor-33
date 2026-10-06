@@ -70,3 +70,47 @@ npm run build
   `frontend/src/data/seed.ts`。
 - 状态流转只允许在 `local-service.ts` 里改，页面组件不做业务判断。
 - 想回到初始数据：清掉浏览器里 `hydropower-plant-om:entries` 这一项，或调用 `resetModule(模块)`。
+
+## 继电保护到期判定（统一口径）
+
+列表的到期等级、动作里的到期提示、另存归档的排序，原先各写一遍且提前量不同，已收拢为
+**唯一实现** `frontend/src/domain/protection/expiry.ts`；配套服务在
+`frontend/src/domain/protection/service.ts`，旁路持久化在 `domain/protection/store.ts`。
+现场巡视隐患清单页面在 `views/patrol/`。
+
+唯一口径（参数与三档边界只此一份）：
+
+- 校验周期 **365 天**，下次校验日 = 上次校验日 + 365；提前量只保留一个 **30 天**。
+- 到期日当天或已逾期 → **待校验**；到期日前 1~30 天 → **即将到期**；31 天以上 → **正常**。
+- 定值单号为空 → **未建档**（三档之外），列表与动作提示都说明「请先补建定值单」，不纳入统计。
+- 动作次数：以「提交校验」时记录的次数为基线，校验后又动作（次数 > 基线）统一按待校验；
+  存量装置没有基线，**不追溯**。
+
+旧数据兼容与既有等级（由实现方决定并在此交代）：
+
+- 装置原表 8 个字段不增不删（另存的列顺序与字段因此不动）；到期等级、判定说明、动作次数基线
+  存放在旁路 meta 中。
+- **既有判定不改写**：首次判定后等级冻结，之后同一天在任何页面结论一致；冻结等级后又动作的，
+  历史等级仍保留在台账中，但展示/提示/排序统一生效为「待校验」（`effectiveTier`）。只有
+  「提交校验」会重新定级。
+- 早期没有下次校验日：按「上次校验日 + 365 天」**倒推回填**该字段，并在到期说明、台账来源中标注。
+- 历史校验记录按上次校验日时间顺序补录，缺项（缺下次校验日等）在「来源」中写清。
+- 初始化幂等：按装置编号去重，反复初始化不会多出重复装置、不会重复台账；重置走
+  `resetModule('protection')`，装置表与旁路数据一起回到种子。
+
+隐患与另存：
+
+- 待校验/即将到期自动进入现场巡视隐患清单，动作（提交校验、退出运行）的处理结论回写闭环；
+  页面条数与导出条数都取自 `openHazards()`，必然相同。
+- 另存按版本号归档（默认当天日期）：同版本**整版覆盖**（取最近一次生效），不与旧版叠加；
+  排序调用统一的 `compareByDue`。
+- 同一时刻的并发写入由同步写锁 + 业务幂等键共同拦截，只保留第一笔，其余按重复处理；
+  台账、隐患、导出明细在同一笔写入里同时更新。
+
+验证脚本（需用 esbuild 打包后在 Node 下运行）：
+
+```bash
+cd frontend
+node -e "require('esbuild').build({entryPoints:['scripts/verify-expiry.ts'],bundle:true,platform:'node',format:'cjs',outfile:'/tmp/v1.cjs'}).then(()=>require('/tmp/v1.cjs'))"
+node -e "require('esbuild').build({entryPoints:['scripts/verify-service.ts'],bundle:true,platform:'node',format:'cjs',outfile:'/tmp/v2.cjs'}).then(()=>require('/tmp/v2.cjs'))"
+```

@@ -3,11 +3,13 @@
     <header class="page-head">
       <div>
         <h2>继电保护管理</h2>
-        <p class="page-desc">维护保护装置，围绕装置编号、保护类型、定值单号、上次校验日做登记、筛选与状态流转。</p>
+        <p class="page-desc">维护保护装置，围绕装置编号、保护类型、定值单号、上次校验日做登记、筛选与状态流转。到期判定全系统一份口径。</p>
       </div>
       <div class="page-actions">
         <button class="btn primary" type="button" @click="openCreate">登记保护装置</button>
         <button class="btn" type="button" @click="exportRows">导出继电保护清单</button>
+        <button class="btn" type="button" @click="saveAs">另存归档</button>
+        <button class="btn ghost" type="button" @click="exportLedger">导出历史校验台账</button>
       </div>
     </header>
 
@@ -73,39 +75,69 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
+import { downloadEntries, listEntries, moduleMeta, runAction as applyAction } from '@/api/local-service'
 import {
-  downloadEntries,
-  listEntries,
-  moduleMeta,
-  runAction as applyAction,
-} from '@/api/local-service'
+  dueNotice,
+  exportLedgerCsv,
+  protectionStats,
+  saveSnapshotAs,
+} from '@/domain/protection/service'
 import type { EntryRow } from '@/data/types'
 
 const meta = moduleMeta('protection')
-const columns = ["装置编号", "保护类型", "定值单号", "上次校验日", "下次校验日", "动作次数", "校验人员", "装置状态"]
+// 装置原表 8 个字段不动；到期等级、到期说明是统一判定的只读展示列，不进导出原表。
+const columns = ["装置编号", "保护类型", "定值单号", "上次校验日", "下次校验日", "动作次数", "校验人员", "装置状态", "到期等级", "到期说明"]
 const actions = ["提交校验", "标记异常", "退出运行"]
 const statuses = ["待校验", "正常", "异常", "已退出"]
-const stats = [{"label": "正常保护装置", "value": 0}, {"label": "待校验装置", "value": 0}, {"label": "即将到期装置", "value": 0}]
 
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
-const filterFields = columns.slice(0, 3)
+const filterFields = ["装置编号", "保护类型", "定值单号"]
 const statusSummary = computed(() =>
   statuses.map((status: string) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+// 统计与列表共用同一份判定结果，三档边界只有 expiry.ts 里那一份。
+const stats = computed(() => protectionStats(rows.value as Parameters<typeof protectionStats>[0]))
 
 function resetFilters() {
   filters.value = {}
   reload()
 }
 
+function download(filename: string, content: string) {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  URL.revokeObjectURL(url)
+}
+
 function exportRows() {
   downloadEntries(meta.key)
+}
+
+function saveAs() {
+  errorMessage.value = ''
+  const result = saveSnapshotAs()
+  if (!result.ok) {
+    errorMessage.value = result.message
+    return
+  }
+  errorMessage.value = result.message
+}
+
+function exportLedger() {
+  const { filename, content } = exportLedgerCsv()
+  download(filename, content)
 }
 
 function openCreate() {
@@ -114,16 +146,18 @@ function openCreate() {
 
 function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
+  // 动作前先给一份统一口径的到期提示。
+  errorMessage.value = dueNotice(row)
   const result = applyAction(meta.key, Number(row.id), action)
   if (!result.ok) {
     errorMessage.value = result.message
-    return
+  } else {
+    errorMessage.value = result.message
   }
   reload()
 }
 
 function reload() {
-  errorMessage.value = ''
   try {
     const payload = listEntries(meta.key, filters.value)
     rows.value = payload.items

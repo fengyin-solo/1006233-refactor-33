@@ -1,5 +1,12 @@
 import { MODULE_BY_KEY } from '@/data/modules'
 import { allRows, listRows, resetRows, saveRows } from '@/data/local-store'
+import {
+  exportHazardsCsv,
+  exportProtectionCsv,
+  listProtectionRows,
+  resetProtection,
+  runProtectionAction,
+} from '@/domain/protection/service'
 import type { ActionResult, EntryRow, ModuleMeta, OverviewResult, PageResult } from '@/data/types'
 
 // 会写进数据的「往回走」动作：命中就把这条记录标成异常态，看板上能一眼看出来。
@@ -24,11 +31,20 @@ export function filterRows(rows: EntryRow[], filters: Record<string, string>): E
 }
 
 export function listEntries(key: string, filters: Record<string, string> = {}): PageResult {
+  if (key === 'protection') {
+    // 继电保护列表的到期等级/说明只来自统一判定，页面不再自己按上次校验日另算一遍。
+    const matched = filterRows(listProtectionRows(), filters)
+    return { items: matched, total: matched.length, page: 1, size: matched.length }
+  }
   const matched = filterRows(listRows(key), filters)
   return { items: matched, total: matched.length, page: 1, size: matched.length }
 }
 
 export function runAction(key: string, id: number, action: string): ActionResult {
+  if (key === 'protection') {
+    // 动作里的到期提示、提交校验后的重新定级都走同一份实现。
+    return runProtectionAction(id, action)
+  }
   const meta = moduleMeta(key)
   const target = meta.actionTargets[action]
   if (!target) {
@@ -57,11 +73,19 @@ export function runAction(key: string, id: number, action: string): ActionResult
 }
 
 export function resetModule(key: string): PageResult {
+  if (key === 'protection') {
+    resetProtection()
+    return listEntries(key)
+  }
   resetRows(key)
   return listEntries(key)
 }
 
 export function exportEntries(key: string): { filename: string; content: string } {
+  if (key === 'protection') {
+    // 导出明细与页面同源：等级来自统一判定，条数与列表一致。
+    return exportProtectionCsv()
+  }
   const meta = moduleMeta(key)
   const header = ['编号', ...meta.fields, '当前状态']
   const lines = [header.join(',')]

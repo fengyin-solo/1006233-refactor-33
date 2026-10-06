@@ -17,6 +17,7 @@ const Hydrology = () => import('@/views/hydrology/index.vue')
 const Flood = () => import('@/views/flood/index.vue')
 const Generation = () => import('@/views/generation/index.vue')
 const Protection = () => import('@/views/protection/index.vue')
+const Patrol = () => import('@/views/patrol/index.vue')
 const Defect = () => import('@/views/defect/index.vue')
 const Crew = () => import('@/views/crew/index.vue')
 const Spare = () => import('@/views/spare/index.vue')
@@ -41,6 +42,7 @@ const router = createRouter({
     { path: '/flood', name: 'flood', component: Flood },
     { path: '/generation', name: 'generation', component: Generation },
     { path: '/protection', name: 'protection', component: Protection },
+    { path: '/patrol', name: 'patrol', component: Patrol },
     { path: '/defect', name: 'defect', component: Defect },
     { path: '/crew', name: 'crew', component: Crew },
     { path: '/spare', name: 'spare', component: Spare },
